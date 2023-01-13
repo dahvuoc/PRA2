@@ -1,0 +1,347 @@
+---
+title: "PRA 2"
+author: "Douglas Hernandez | Ernesto Miguez"
+date: "2023-01-12"
+output: html_document
+---
+```{r}
+
+# Configurando la sesión de R
+
+options(scipen=999)
+
+# Carga de paquetes a utilizar
+library(tidyverse)
+library(janitor)
+library(arules)
+
+```
+
+
+```{r}
+# Estableciendo el directorio de trabajo de los datos
+
+setwd("/Users/Ernesto/Desktop/Universidad/Master Ciencia de Datos/Semestre 5/Ciclo de vida de los datos/PRA 2/data/")
+
+# Cargando los datos para la practica
+
+# Datos Forbes
+
+forbes <- read.csv("forbes_2000.csv")
+
+# Datos GDP
+
+gdp <- read.csv("gdp_2.csv")
+```
+
+```{r}
+
+# Eliminando las comas del campo GDP para que sea reconocido como un valor numérico
+
+gdp$GDP <- str_replace_all(gdp$GDP,",","")
+
+# Dividiendo entre un billón para facilitar la lectura de las cifras de GDP
+
+gdp <- gdp %>% 
+  mutate(GDP2 = as.numeric(gdp$GDP) / 1000000000)
+```
+
+
+```{r}
+
+# Se unieron las tablas de forbes con gdp para complementar el análisis
+
+data1 <- left_join(forbes, gdp, by = c("Country" = "Country.Name"))
+
+# contabilizando los na luego de la unión de las tablas
+
+colSums(is.na(data1))
+
+
+```
+Se aprecian un total de 191 NAs debido a que el campo clave que es el nombre de los países no son iguales en ambas tablas de datos.
+
+```{r}
+
+# Modificando los nombres de países en la data de gdp para que coincidan con la información de la data de
+# Forbes
+
+nuevos_nombres_gdp <- c("Korea, Rep." = "South Korea", 
+                        "Hong Kong SAR, China" =  "Hong Kong", 
+                        "Russian Federation" = "Russia",
+                        "Egypt, Arab Rep." = "Egypt")
+
+gdp$Country.Name <- str_replace_all(gdp$Country.Name, nuevos_nombres_gdp)
+
+```
+
+
+```{r}
+
+# Realizamos de nuevo el join para corregir el cruce de datos hecho anteriormente 
+
+data1 <- left_join(forbes, gdp, by = c("Country" = "Country.Name"))
+
+# contabilizando los na luego de la unión de las tablas
+
+colSums(is.na(data1))
+
+```
+
+Luego de corregir los nombres de los países, aun quedan un total de 48 registros los cuales corresponden a Taiwan. En la data de gdp extraída de Kaggle, se aprecia que no existen registros para Taiwan.
+
+Excluiremos estos registros con el fin de tener un dataset completo
+
+```{r}
+
+# Exclusión de registros con al menos un campo con na
+
+data1 <- na.omit(data1)
+
+# Limpiando los nombres de las variables para facilitar el análisis
+
+data1 <- data1 %>% janitor::clean_names()
+
+```
+
+Ahora seleccionaremos las variables cuantitativas de interés para realizar un análisis de los outliers mediante gráficos de boxplots.
+
+```{r}
+
+# Seleccionando las variables cuantitativas para construir un boxplot
+
+data_cuanti <- data1 %>% 
+  select(7:10, 14, 16)
+
+```
+
+
+```{r}
+
+# Seleccionando las variables cuantitativas para construir un boxplot
+
+# Graficando boxplots para cada una de las variables cuantitativas
+
+for (column in colnames(data_cuanti)){
+  
+  p <- ggplot(data_cuanti, aes_string(x=column)) +
+    geom_boxplot() +
+    coord_flip()
+  
+  print(p)
+}
+
+```
+
+Con los boxplots podemos observar la existencia de valores extremos en la mayoría de las variables, esto se debe principalmente a que las empresas listadas en el dataset de Forbes provienen de economías de distintos tamaños. 
+
+Realizaremos una segmentación mediante el algoritmo de K-Means tomando como variable para segmentar el gdp.
+
+```{r}
+
+set.seed(123)
+
+clasificacion <- table(discretize(data1$gdp2, "cluster"))
+
+# Graficando un histograma con los limites definidos por kmeans
+
+hist(data1$gdp2, main = "Segmentación por K-Means, variable gdp2",
+     xlab = "gdp en miles de millones",
+     ylab = "Cantidad",
+     col="ivory")
+
+axis(side=1, at=seq(0,20000, 2500), labels=seq(0,20000, 2500))
+
+abline(v=discretize(data1$gdp2, method = 'cluster', onlycuts = TRUE), col='red')
+
+```
+
+Al hacer uso del algoritmo de K-Means, se observa la existencia de 3 grupos de acuerdo con el GDP de los países analizados. Para continuar con el desarrollo de esta practica, nos enfocaremos en las empresas para las cuales la economía del país de procedencia de estas sea superior a 17500 de acuerdo a lo observado en el gráfico.
+
+```{r}
+
+# Filtrando los datos: Solo nos quedamos con las compañías en las cuales su país de procedencia tenga 
+# un gdp mayor a 17500
+
+forbes_a <- data1 %>% 
+  filter(gdp2 >= 17500)
+
+# Países presentes en los datos filtrados
+unique(forbes_a$country)
+
+# Cantidad de registros en la data filtrada
+nrow(forbes_a)
+
+```
+
+Al realizar el filtro descrito anteriormente, se comprobó que en el dataset de forbes_a solamente quedan empresas provenientes de Estados Unidos con un total de 584 compañías.
+
+Realizamos de nuevo los boxplots para validar la dispersión en este nuevo dataset
+
+```{r}
+
+for (column in colnames(forbes_a[,c(7:10)])){
+  
+  p <- ggplot(forbes_a[,c(7:10)], aes_string(x=column)) +
+    geom_boxplot() +
+    coord_flip()
+  
+  print(p)
+}
+
+```
+Al analizar solo las compañías provenientes de Estados Unidos, seguimos observando valores outliers. Realizaremos la inputación de la mediana con el objetivo de tratar estos valores.
+
+```{r}
+
+# Análisis descriptivo para determinar las medidas de tendencia central y dispersión de los datos
+
+summary(forbes_a)
+
+```
+Vamos a crear nuevas variables que permitan categorizar los registros como "Outliers" y "No Outliers"
+
+```{r}
+
+forbes_a <- forbes_a %>% 
+  mutate(revenue_billions_2 = case_when(revenue_billions < 5.60 - (1.5*(22.01-5.60)) | revenue_billions > 22.01 + (1.5*(22.01-5.60)) ~ "Outlier",
+                                         TRUE ~ "No outlier"),
+         profits_billions_2 = case_when(profits_billions < 0.6675 - (1.5*(2.5625-0.6675)) | profits_billions > 2.5625 + (1.5*(2.5625-0.6675)) ~ "Outlier",
+                                        TRUE ~ "No outlier"),
+         assets_billions_2 = case_when(assets_billions < 12.92 - (1.5*(59.19-12.92)) | assets_billions > 59.19 + (1.5*(59.19-12.92)) ~ "Outlier",
+                                        TRUE ~ "No outlier"),
+         market_value_billions_2 = case_when(market_value_billions < 13.82 - (1.5*(52.01-13.82)) | market_value_billions > 52.01 + (1.5*(52.01-13.82)) ~ "Outlier",
+                                       TRUE ~ "No outlier"))
+
+
+```
+
+Haciendo uso de la variable creada en el paso anterior, inputaremos la mediana para los outliers.
+
+```{r}
+
+forbes_a <- forbes_a %>% 
+  mutate(revenue_billions_f = ifelse(revenue_billions_2 == "No outlier", revenue_billions, median(revenue_billions)),
+         profits_billions_f = ifelse(profits_billions_2 == "No outlier", profits_billions, median(profits_billions)),
+         assets_billions_f = ifelse(assets_billions_2 == "No outlier", assets_billions, median(assets_billions)),
+         market_value_billions_f = ifelse(market_value_billions_2 == "No outlier", market_value_billions, median(market_value_billions)))
+
+```
+
+Al graficar de nuevo los boxplots luego de inputar la mediana a los outliers, se aprecia como mejora la dispersión de las variables.
+
+```{r}
+
+for (column in colnames(forbes_a[,c(21:24)])){
+  
+  p <- ggplot(forbes_a[,c(21:24)], aes_string(x=column)) +
+    geom_boxplot() +
+    coord_flip()
+  
+  print(p)
+}
+
+```
+
+Luego de realizar estos ajustes, seleccionaremos un subconjunto de variables para facilitar el análisis y realizamos de nuevo un análisis descriptivo para entender mejor las variables escogidas.
+
+```{r}
+
+forbes_a_def <- forbes_a %>% 
+  select(1:6, 21:24)
+
+# Realizando un análisis descriptivo con el paquete skimr
+
+skimr::skim(forbes_a_def)
+
+
+```
+
+Se puede apreciar que hay un total de cuatro variables cualitativas y 6 variables cuantitativas. Para las variables de interes se observa que la mediana de revenue_billions_f es de 11.6 billones de dólares, la mediana de profits_billions_f es de 1.16 billones de dólares, la mediana de assets_billions_f es de 24.7 billones de dolares y la mediana de market_value_billions_f es de 26.5 billones de dólares.
+
+Continuaremos analizando la normalidad de las variables cuantitativas seleccionadas.
+
+```{r}
+
+shapiro.test(forbes_a_def$revenue_billions_f)
+shapiro.test(forbes_a_def$profits_billions_f)
+shapiro.test(forbes_a_def$assets_billions_f)
+shapiro.test(forbes_a_def$market_value_billions_f)
+
+```
+
+En los resultados del test de Shapiro Wilk se observan que los P-Valores de las cuatro pruebas son menores a 0.05 por lo cual podemos concluir que las distribuciones de estas variables difieren significativamente de una distribución normal. 
+
+Analizamos los histogramas de cada variable para ver el sego de las mismas, en donde se observa que están sesgadas de forma positiva.
+
+```{r}
+
+for (column in colnames(forbes_a[,c(7:10)])){
+  
+  p <- ggplot(forbes_a[,c(7:10)], aes_string(x=column)) +
+    geom_histogram(binwidth = 10, bins = 30) 
+  
+  print(p)
+}
+
+```
+Realizamos el análisis de la homocedasticidad de la varianza para las variables cuantitativas de nuestro dataset, en donde concluimos que estas son homocedasticas.
+
+```{r}
+
+car::leveneTest(forbes_a_def$revenue_billions_f ~ forbes_a_def$industry)
+car::leveneTest(forbes_a_def$profits_billions_f ~ forbes_a_def$industry)
+car::leveneTest(forbes_a_def$assets_billions_f ~ forbes_a_def$industry)
+car::leveneTest(forbes_a_def$market_value_billions_f ~ forbes_a_def$industry)
+
+
+```
+Definiremos como variable objetivo a revenue_billions_f para estudiar la correlación de esta con el resto de variables cuantitativas
+
+```{r}
+
+GGally::ggpairs(forbes_a_def[, c(1, 7:10)])
+
+```
+
+En la visualización de la matriz de correlación se observa que existe una correlación inversa media entre revenue_billions_f y el ranking y una correlación directa baja entre revenue_billions_f y el resto de variables.
+
+Crearemos un modelo de regresión lineal que permita predecir la variable revenue_billions_f haciendo uso de las variables x2022_ranking, assets_billions_f y profits_billions_f.
+
+```{r}
+modelo_1 <- lm(revenue_billions_f ~ x2022_ranking + assets_billions_f + profits_billions_f,
+               data=forbes_a_def)
+
+summary(modelo_1)
+
+```
+
+En el summary del modelo se observa que el ajuste de R cuadrado ajustado no es bueno ya que este solo explica un 26.68% de la variabilidad de revenue_billions_f y que solamente el ranking es significativa para el modelo.
+
+
+Construiremos un modelo nuevo solamente con la variable ranking para validar los resultados.
+
+```{r}
+modelo_2 <- lm(revenue_billions_f ~ x2022_ranking,
+               data=forbes_a_def)
+
+summary(modelo_2)
+
+```
+Se aprecia en el nuevo modelo que la variable ranking sigue siendo significativa pero aun el R2 ajustado sigue siendo muy bajo para considerar este modelo como predictivo.
+
+Como parte final de la practica realizaremos un análisis de la varianza para ver si el revenue_billions es distinto por industria.
+
+
+```{r}
+
+aov_test <- aov(revenue_billions_f ~ industry, data = forbes_a_def)
+
+summary(aov_test)
+
+```
+
+En vista de que el P-Valor es menor a 0.05, podemos concluir que hay diferencias significativas de revenue_billions_f entre las industrias presentes en los datos.
+
+
+
